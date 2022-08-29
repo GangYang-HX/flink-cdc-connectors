@@ -175,8 +175,16 @@ public class DebeziumSourceFunction<T> extends RichSourceFunction<T>
      */
     private transient ListState<String> schemaRecordsState;
 
+    /**
+     * 以上State相关的这三个变量主要用于状态的维护，当任务出现问题重启/手动重启后，维护的一些schema(record中的结构)未消费的
+     * record(在queue中) offset等信息
+     */
+
     // ---------------------------------------------------------------------------------------
-    // Worker
+    // Worker：
+    /**
+     * 一个单线程的线程池，一个debeziumEngine(一个Runnable的实现类)用于读取binlog数据 ==》》》后续可以考虑设计到多线程交互
+     */
     // ---------------------------------------------------------------------------------------
 
     private transient ExecutorService executor;
@@ -188,13 +196,13 @@ public class DebeziumSourceFunction<T> extends RichSourceFunction<T>
     private transient String engineInstanceName;
 
     /** Consume the events from the engine and commit the offset to the engine. */
-    private transient DebeziumChangeConsumer changeConsumer;
+    private transient DebeziumChangeConsumer changeConsumer; //一个consumer，用于从engine中读取数据的消费者，并将数据放入handover中
 
     /** The consumer to fetch records from {@link Handover}. */
-    private transient DebeziumChangeFetcher<T> debeziumChangeFetcher;
+    private transient DebeziumChangeFetcher<T> debeziumChangeFetcher; //用于从handover中拿取数据
 
     /** Buffer the events from the source and record the errors from the debezium. */
-    private transient Handover handover;
+    private transient Handover handover; //两个线程（source,engine）之间交互数据的一个桥梁
 
     // ---------------------------------------------------------------------------------------
 
@@ -402,12 +410,12 @@ public class DebeziumSourceFunction<T> extends RichSourceFunction<T>
                         dbzHeartbeatPrefix,
                         handover);
 
-        // create the engine with this configuration ...
+        // create the engine with this configuration ... 创建并配置engine相关参数
         this.engine =
                 DebeziumEngine.create(Connect.class)
-                        .using(properties)
-                        .notifying(changeConsumer)
-                        .using(OffsetCommitPolicy.always())
+                        .using(properties) //参数
+                        .notifying(changeConsumer) //配置consumer消费，用于从engine读取的数据（binlog/历史全量数据）--》历史全量数据==snapshot
+                        .using(OffsetCommitPolicy.always()) //offset的提交策略
                         .using(
                                 (success, message, error) -> {
                                     if (success) {
@@ -420,7 +428,7 @@ public class DebeziumSourceFunction<T> extends RichSourceFunction<T>
                         .build();
 
         // run the engine asynchronously
-        executor.execute(engine);
+        executor.execute(engine); //将engine任务提交到线程池中执行
         debeziumStarted = true;
 
         // initialize metrics
@@ -440,7 +448,7 @@ public class DebeziumSourceFunction<T> extends RichSourceFunction<T>
         metricGroup.gauge(
                 "sourceIdleTime", (Gauge<Long>) () -> debeziumChangeFetcher.getIdleTime());
 
-        // start the real debezium consumer
+        // start the real debezium consumer 启动fetcher,循环去handover中拿取最新数据发送到下游
         debeziumChangeFetcher.runFetchLoop();
     }
 

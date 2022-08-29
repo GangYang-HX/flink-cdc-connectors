@@ -44,15 +44,18 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *
  * <p>The Handover can also be "closed", signalling from one thread to the other that it the thread
  * has terminated.
+ *
+ * source线程和engine线程执行中数据交互桥梁
+ * 这个类由两个线程访问，pollNext由debeziumFetcher调用，produce由debeziumConsumer调用
  */
-@ThreadSafe
+@ThreadSafe //这个注解用于表示这个类是线程安全的，这类涉及engine和source线程两个线程操作，内部实现保证类线程安全
 @Internal
 public class Handover implements Closeable {
 
     private static final Logger LOG = LoggerFactory.getLogger(Handover.class);
     private final Object lock = new Object();
 
-    @GuardedBy("lock")
+    @GuardedBy("lock") //注解表示该变量受lock的保护
     private List<ChangeEvent<SourceRecord, SourceRecord>> next;
 
     @GuardedBy("lock")
@@ -70,16 +73,23 @@ public class Handover implements Closeable {
      * @return The next element (buffer of records, never null).
      * @throws ClosedException Thrown if the Handover was {@link #close() closed}.
      * @throws Exception Rethrows exceptions from the {@link #reportError(Throwable)} method.
+     *
+     * 在debeziumFetcher中的runFetchLoop方法调用，当没有数据的时候进入wait状态，wait状态的时候CPU是不会调用wait状态的
+     * 线程，另一个线程就可以占用CPU的全部时间片
      */
     public List<ChangeEvent<SourceRecord, SourceRecord>> pollNext() throws Exception {
-        synchronized (lock) {
+        synchronized (lock) { //同步代码块才可以使用wait和notifyAll，为什么使用这种方式，因为只有两个线程，所以这种方式实现简单，如果线程多则可以考虑其他lock
+
+            //没有数据没有异常则持续循环进入wait状态，为了防止虚假唤醒的情况
             while (next == null && error == null) {
                 lock.wait();
             }
+
+            // 上面的循环可以退出的时候，说明一定是有数据或者有异常，不存在其他情况
             List<ChangeEvent<SourceRecord, SourceRecord>> n = next;
             if (n != null) {
-                next = null;
-                lock.notifyAll();
+                next = null; //将next设置为null,后续会根据这个值作为判断条件
+                lock.notifyAll(); //唤醒其他等待线程，当然只可能是engine线程（也就是Handover的producer方法）
                 return n;
             } else {
                 ExceptionUtils.rethrowException(error, error.getMessage());
@@ -108,13 +118,14 @@ public class Handover implements Closeable {
         checkNotNull(element);
 
         synchronized (lock) {
+            //next值不等于null则一直进入wait状态
             while (next != null && !wakeupProducer) {
                 lock.wait();
             }
 
             wakeupProducer = false;
 
-            // an error marks this as closed for the producer
+            // an error marks this as closed for the producer 有异常则抛出异常，没有异常将接收新数据，并唤醒fetcher线程
             if (error != null) {
                 ExceptionUtils.rethrow(error, error.getMessage());
             } else {

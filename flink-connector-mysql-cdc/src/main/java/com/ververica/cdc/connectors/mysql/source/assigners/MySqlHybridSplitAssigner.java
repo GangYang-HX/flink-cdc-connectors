@@ -44,6 +44,13 @@ import static com.ververica.cdc.connectors.mysql.source.assigners.AssignerStatus
 /**
  * A {@link MySqlSplitAssigner} that splits tables into small chunk splits based on primary key
  * range and chunk size and also continue with a binlog split.
+ *
+ * MySql 混合拆分分配器：这里是混合的一个split，另外还存在binlog和snapshot的splitAssigner。关于这两个流程的先后关系是，先读取mysql历史数据即snapshot
+ * 阶段，然后再进行当前mysql-binlog的位置开始消费，所以这个混合的意义就是先读取全量数据，然后从最新的binlog开始读取，完成cdc读取数据的过程
+ *
+ * Mysql如何进行Split操作的呢？在snapshot阶段是通过主键split的，binlog阶段只从当前offset位置开始消费
+ *
+ * 在
  */
 public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
 
@@ -62,6 +69,7 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
             List<TableId> remainingTables,
             boolean isTableIdCaseSensitive) {
         this(
+                //创建snapshot split
                 new MySqlSnapshotSplitAssigner(
                         sourceConfig, currentParallelism, remainingTables, isTableIdCaseSensitive),
                 false,
@@ -93,6 +101,7 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
         snapshotSplitAssigner.open();
     }
 
+    // 主要返回下一个split，没有则返回一个空
     @Override
     public Optional<MySqlSplit> getNext() {
         if (isSuspended(getAssignerStatus())) {
@@ -109,7 +118,7 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
                 // assigning the binlog split. Otherwise, records emitted from binlog split
                 // might be out-of-order in terms of same primary key with snapshot splits.
                 isBinlogSplitAssigned = true;
-                return Optional.of(createBinlogSplit());
+                return Optional.of(createBinlogSplit()); //当snapshot完成后，开始binlog的split流程
             } else if (isNewlyAddedAssigningFinished(snapshotSplitAssigner.getAssignerStatus())) {
                 // do not need to create binlog, but send event to wake up the binlog reader
                 isBinlogSplitAssigned = true;
@@ -124,11 +133,13 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
         }
     }
 
+    // splitAssigner是否在等待已完成的split回调，即onFinishedSplits
     @Override
     public boolean waitingForFinishedSplits() {
         return snapshotSplitAssigner.waitingForFinishedSplits();
     }
 
+    // 获取已完成的split并且包含
     @Override
     public List<FinishedSnapshotSplitInfo> getFinishedSplitInfos() {
         return snapshotSplitAssigner.getFinishedSplitInfos();

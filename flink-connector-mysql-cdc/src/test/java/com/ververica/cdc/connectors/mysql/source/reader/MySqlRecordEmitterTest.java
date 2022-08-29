@@ -25,7 +25,6 @@ import com.ververica.cdc.connectors.mysql.source.metrics.MySqlSourceReaderMetric
 import com.ververica.cdc.connectors.mysql.source.offset.BinlogOffset;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlBinlogSplit;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlBinlogSplitState;
-import com.ververica.cdc.connectors.mysql.source.split.SourceRecords;
 import com.ververica.cdc.debezium.DebeziumDeserializationSchema;
 import io.debezium.heartbeat.Heartbeat;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -51,10 +50,7 @@ public class MySqlRecordEmitterTest {
                 fakeOffset.getOffset(),
                 record -> {
                     try {
-                        recordEmitter.emitRecord(
-                                SourceRecords.fromSingleRecord(record),
-                                new TestingReaderOutput<>(),
-                                splitState);
+                        recordEmitter.emitRecord(record, new TestingReaderOutput<>(), splitState);
                     } catch (Exception e) {
                         throw new RuntimeException("Failed to emit heartbeat record", e);
                     }

@@ -46,6 +46,8 @@ import java.util.Queue;
  * emitting the records.
  *
  * @param <T> The type of elements produced by the handler.
+ *
+ * 循环从handover中获取consumer从engine读取的最新数据
  */
 @Internal
 public class DebeziumChangeFetcher<T> {
@@ -58,20 +60,23 @@ public class DebeziumChangeFetcher<T> {
      * The lock that guarantees that record emission and state updates are atomic, from the view of
      * taking a checkpoint.
      */
-    private final Object checkpointLock;
+    private final Object checkpointLock; //保证数据发送和状态更新的一把锁
 
     /** The schema to convert from Debezium's messages into Flink's objects. */
     private final DebeziumDeserializationSchema<T> deserialization;
 
     /** A collector to emit records in batch (bundle). */
-    private final DebeziumCollector debeziumCollector;
+    private final DebeziumCollector debeziumCollector; //自定义的collector
 
     private final DebeziumOffset debeziumOffset;
 
+    /* 用于存储在stateOffset的序列化器 */
     private final DebeziumOffsetSerializer stateSerializer;
 
+    /* 心跳相关 */
     private final String heartbeatTopicPrefix;
 
+    /* 是否恢复的状态，需要消费历史相关数据，同时也用作是否从binlog进行流式消费的标识*/
     private boolean isInDbSnapshotPhase;
 
     private final Handover handover;
@@ -137,17 +142,20 @@ public class DebeziumChangeFetcher<T> {
     /**
      * Process change messages from the {@link Handover} and collect the processed messages by
      * {@link Collector}.
+     *
+     * 循环拿取数据并发送到下游
      */
     public void runFetchLoop() throws Exception {
         try {
             // begin snapshot database phase
-            if (isInDbSnapshotPhase) {
+            if (isInDbSnapshotPhase) { //读取mysql历史的数据，也就是snapshot数据
                 List<ChangeEvent<SourceRecord, SourceRecord>> events = handover.pollNext();
 
                 synchronized (checkpointLock) {
                     LOG.info(
                             "Database snapshot phase can't perform checkpoint, acquired Checkpoint lock.");
                     handleBatch(events);
+                    //这里防止snapshot数据无法一次读取完毕，必须保证snapshot数据读取完毕才进入binlog读取
                     while (isRunning && isInDbSnapshotPhase) {
                         handleBatch(handover.pollNext());
                     }
@@ -155,11 +163,11 @@ public class DebeziumChangeFetcher<T> {
                 LOG.info("Received record from streaming binlog phase, released checkpoint lock.");
             }
 
-            // begin streaming binlog phase
+            // begin streaming binlog phase 到这里表示snapshot的数据已经读取完毕，开始实时读取binlog数据
             while (isRunning) {
                 // If the handover is closed or has errors, exit.
                 // If there is no streaming phase, the handover will be closed by the engine.
-                handleBatch(handover.pollNext());
+                handleBatch(handover.pollNext()); //具体的数据处理逻辑，pollNext会阻塞
             }
         } catch (Handover.ClosedException e) {
             // ignore
@@ -223,6 +231,7 @@ public class DebeziumChangeFetcher<T> {
             updateMessageTimestamp(record);
             fetchDelay = isInDbSnapshotPhase ? 0L : processTime - messageTimestamp;
 
+            // 通过心跳机制来更新offset
             if (isHeartbeatEvent(record)) {
                 // keep offset update
                 synchronized (checkpointLock) {
@@ -233,15 +242,21 @@ public class DebeziumChangeFetcher<T> {
                 continue;
             }
 
+            /**
+             * 根据不同的deserialization对数据做转换
+             * eg:StringDebeziumDeserializationSchema,内部直接record.toString即可
+             * 就是将debezium读取的record转换成我们想要的格式或者类型，debeziumCollector就是自定义的collector,
+             * 在deserialize方法中会将转换完成的数据放入debeziumCollector中：out.collect(record.toString())
+             */
             deserialization.deserialize(record, debeziumCollector);
 
-            if (!isSnapshotRecord(record)) {
+            if (!isSnapshotRecord(record)) { //判断数据是否为snapshot的最后一条数据，如果是则在这条数据之后转换到binlog的Streaming流程
                 LOG.debug("Snapshot phase finishes.");
-                isInDbSnapshotPhase = false;
+                isInDbSnapshotPhase = false; // runFetchLoop方法中使用
             }
 
             // emit the actual records. this also updates offset state atomically
-            emitRecordsUnderCheckpointLock(
+            emitRecordsUnderCheckpointLock( //具体发送数据的地方
                     debeziumCollector.records, record.sourcePartition(), record.sourceOffset());
         }
     }
@@ -251,12 +266,12 @@ public class DebeziumChangeFetcher<T> {
         // Emit the records. Use the checkpoint lock to guarantee
         // atomicity of record emission and offset state update.
         // The synchronized checkpointLock is reentrant. It's safe to sync again in snapshot mode.
-        synchronized (checkpointLock) {
+        synchronized (checkpointLock) { //同步是保证数据的发送和Offset的更新是安全的，lock是可重入的
             T record;
             while ((record = records.poll()) != null) {
                 emitDelay =
                         isInDbSnapshotPhase ? 0L : System.currentTimeMillis() - messageTimestamp;
-                sourceContext.collect(record);
+                sourceContext.collect(record); //通过source的context对象将其发送到下游operator,这里传入了flink的处理逻辑，不在cdc代码之内
             }
             // update offset to state
             debeziumOffset.setSourcePartition(sourcePartition);
@@ -302,13 +317,14 @@ public class DebeziumChangeFetcher<T> {
 
     // ---------------------------------------------------------------------------------------
 
+    //自定义collector
     private class DebeziumCollector implements Collector<T> {
 
         private final Queue<T> records = new ArrayDeque<>();
 
         @Override
         public void collect(T record) {
-            records.add(record);
+            records.add(record); //将数据放入队列，queue会在别的地方将数据发送到下游
         }
 
         @Override

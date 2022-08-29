@@ -29,7 +29,6 @@ import com.ververica.cdc.connectors.mysql.source.assigners.MySqlSnapshotSplitAss
 import com.ververica.cdc.connectors.mysql.source.config.MySqlSourceConfig;
 import com.ververica.cdc.connectors.mysql.source.config.MySqlSourceConfigFactory;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlSplit;
-import com.ververica.cdc.connectors.mysql.source.split.SourceRecords;
 import com.ververica.cdc.connectors.mysql.testutils.RecordsFormatter;
 import com.ververica.cdc.connectors.mysql.testutils.UniqueDatabase;
 import io.debezium.connector.mysql.MySqlConnection;
@@ -398,11 +397,11 @@ public class SnapshotSplitReaderTest extends MySqlSourceTestBase {
             if (snapshotSplitReader.isFinished()) {
                 snapshotSplitReader.submitSplit(sqlSplit);
             }
-            Iterator<SourceRecords> res;
+            Iterator<SourceRecord> res;
             while ((res = snapshotSplitReader.pollSplitRecords()) != null) {
                 while (res.hasNext()) {
-                    SourceRecords sourceRecords = res.next();
-                    result.addAll(sourceRecords.getSourceRecordList());
+                    SourceRecord sourceRecord = res.next();
+                    result.add(sourceRecord);
                 }
             }
         }

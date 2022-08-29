@@ -30,7 +30,11 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 
-/** Consume debezium change events. */
+/** Consume debezium change events.
+ *  用于消费engine读取的数据。
+ *  该类实现DebeziumEngine.ChangeConsumer接口，然后实现handleBatch方法，另外两个成员方法主要是Offset相关。
+ *  engine线程会调用handleBatch方法来传递引擎消费到的数据
+ * */
 @Internal
 public class DebeziumChangeConsumer
         implements DebeziumEngine.ChangeConsumer<ChangeEvent<SourceRecord, SourceRecord>> {
@@ -52,6 +56,8 @@ public class DebeziumChangeConsumer
             RecordCommitter<ChangeEvent<SourceRecord, SourceRecord>> recordCommitter) {
         try {
             currentCommitter = recordCommitter;
+
+            //间接调用Handover的produce方法，该方法是阻塞的（如果有历史records未被消费则wait）
             handover.produce(events);
         } catch (Throwable e) {
             // Hold this exception in handover and trigger the fetcher to exit

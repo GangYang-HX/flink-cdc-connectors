@@ -28,7 +28,6 @@ import com.ververica.cdc.connectors.mysql.source.offset.BinlogOffset;
 import com.ververica.cdc.connectors.mysql.source.split.FinishedSnapshotSplitInfo;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlBinlogSplit;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlSplit;
-import com.ververica.cdc.connectors.mysql.source.split.SourceRecords;
 import com.ververica.cdc.connectors.mysql.source.utils.ChunkUtils;
 import com.ververica.cdc.connectors.mysql.source.utils.RecordUtils;
 import io.debezium.connector.base.ChangeEventQueue;
@@ -64,7 +63,7 @@ import static com.ververica.cdc.connectors.mysql.source.utils.RecordUtils.isData
  * A Debezium binlog reader implementation that also support reads binlog and filter overlapping
  * snapshot data that {@link SnapshotSplitReader} read.
  */
-public class BinlogSplitReader implements DebeziumReader<SourceRecords, MySqlSplit> {
+public class BinlogSplitReader implements DebeziumReader<SourceRecord, MySqlSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(BinlogSplitReader.class);
     private final StatefulTaskContext statefulTaskContext;
@@ -146,7 +145,7 @@ public class BinlogSplitReader implements DebeziumReader<SourceRecords, MySqlSpl
 
     @Nullable
     @Override
-    public Iterator<SourceRecords> pollSplitRecords() throws InterruptedException {
+    public Iterator<SourceRecord> pollSplitRecords() throws InterruptedException {
         checkReadException();
         final List<SourceRecord> sourceRecords = new ArrayList<>();
         if (currentTaskRunning) {
@@ -156,9 +155,7 @@ public class BinlogSplitReader implements DebeziumReader<SourceRecords, MySqlSpl
                     sourceRecords.add(event.getRecord());
                 }
             }
-            List<SourceRecords> sourceRecordsSet = new ArrayList<>();
-            sourceRecordsSet.add(new SourceRecords(sourceRecords));
-            return sourceRecordsSet.iterator();
+            return sourceRecords.iterator();
         } else {
             return null;
         }

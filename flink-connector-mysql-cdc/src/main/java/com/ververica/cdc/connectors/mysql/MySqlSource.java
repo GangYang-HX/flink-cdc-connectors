@@ -63,11 +63,11 @@ public class MySqlSource {
         private String username;
         private String password;
         private Integer serverId;
-        private String serverTimeZone;
+        private String serverTimeZone; //时区
         private String[] tableList;
-        private Properties dbzProperties;
-        private StartupOptions startupOptions = StartupOptions.initial();
-        private DebeziumDeserializationSchema<T> deserializer;
+        private Properties dbzProperties; //传入的dbz引擎所需的属性
+        private StartupOptions startupOptions = StartupOptions.initial(); //用于控制开始binlog开始消费位置的参数
+        private DebeziumDeserializationSchema<T> deserializer; //定义序列化方式，用于对数据解析成什么样子，如Json,String等
 
         public Builder<T> hostname(String hostname) {
             this.hostname = hostname;
@@ -155,6 +155,10 @@ public class MySqlSource {
             return this;
         }
 
+        /**
+         * 上面参数配置完成之后，通过build构建SourceFunction，主要将配置信息封装到Properties中，这里面的
+         * 参数主要是debezium所需要的启动参数、配置信息等，具体可参考debezium官网
+         */
         public DebeziumSourceFunction<T> build() {
             Properties props = new Properties();
             props.setProperty("connector.class", MySqlConnector.class.getCanonicalName());
@@ -245,6 +249,7 @@ public class MySqlSource {
                 }
             }
 
+            // 构建通用的cdc sourceFunction --> 基于RichSourceFunction
             return new DebeziumSourceFunction<>(
                     deserializer, props, specificOffset, new MySqlValidator(props));
         }

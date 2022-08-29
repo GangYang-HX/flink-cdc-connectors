@@ -29,7 +29,6 @@ import com.ververica.cdc.connectors.mysql.source.offset.BinlogOffset;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlBinlogSplit;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlSnapshotSplit;
 import com.ververica.cdc.connectors.mysql.source.split.MySqlSplit;
-import com.ververica.cdc.connectors.mysql.source.split.SourceRecords;
 import com.ververica.cdc.connectors.mysql.source.utils.RecordUtils;
 import io.debezium.config.Configuration;
 import io.debezium.connector.base.ChangeEventQueue;
@@ -72,7 +71,7 @@ import static org.apache.flink.util.Preconditions.checkState;
  * A snapshot reader that reads data from Table in split level, the split is assigned by primary key
  * range.
  */
-public class SnapshotSplitReader implements DebeziumReader<SourceRecords, MySqlSplit> {
+public class SnapshotSplitReader implements DebeziumReader<SourceRecord, MySqlSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SnapshotSplitReader.class);
     private final StatefulTaskContext statefulTaskContext;
@@ -236,7 +235,7 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecords, MySqlS
 
     @Nullable
     @Override
-    public Iterator<SourceRecords> pollSplitRecords() throws InterruptedException {
+    public Iterator<SourceRecord> pollSplitRecords() throws InterruptedException {
         checkReadException();
 
         if (hasNextElement.get()) {
@@ -289,10 +288,7 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecords, MySqlS
             normalizedRecords.add(lowWatermark);
             normalizedRecords.addAll(formatMessageTimestamp(snapshotRecords.values()));
             normalizedRecords.add(highWatermark);
-
-            final List<SourceRecords> sourceRecordsSet = new ArrayList<>();
-            sourceRecordsSet.add(new SourceRecords(normalizedRecords));
-            return sourceRecordsSet.iterator();
+            return normalizedRecords.iterator();
         }
         // the data has been polled, no more data
         reachEnd.compareAndSet(false, true);

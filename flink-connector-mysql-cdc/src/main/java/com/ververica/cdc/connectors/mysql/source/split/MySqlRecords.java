@@ -18,6 +18,8 @@ package com.ververica.cdc.connectors.mysql.source.split;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 
+import org.apache.kafka.connect.source.SourceRecord;
+
 import javax.annotation.Nullable;
 
 import java.util.Collections;
@@ -27,11 +29,11 @@ import java.util.Set;
 /**
  * An implementation of {@link RecordsWithSplitIds} which contains the records of one table split.
  */
-public final class MySqlRecords implements RecordsWithSplitIds<SourceRecords> {
+public final class MySqlRecords implements RecordsWithSplitIds<SourceRecord> {
 
     @Nullable private String splitId;
-    @Nullable private Iterator<SourceRecords> recordsForCurrentSplit;
-    @Nullable private final Iterator<SourceRecords> recordsForSplit;
+    @Nullable private Iterator<SourceRecord> recordsForCurrentSplit;
+    @Nullable private final Iterator<SourceRecord> recordsForSplit;
     private final Set<String> finishedSnapshotSplits;
 
     public MySqlRecords(
@@ -57,8 +59,8 @@ public final class MySqlRecords implements RecordsWithSplitIds<SourceRecords> {
 
     @Nullable
     @Override
-    public SourceRecords nextRecordFromSplit() {
-        final Iterator<SourceRecords> recordsForSplit = this.recordsForCurrentSplit;
+    public SourceRecord nextRecordFromSplit() {
+        final Iterator<SourceRecord> recordsForSplit = this.recordsForCurrentSplit;
         if (recordsForSplit != null) {
             if (recordsForSplit.hasNext()) {
                 return recordsForSplit.next();
@@ -76,7 +78,7 @@ public final class MySqlRecords implements RecordsWithSplitIds<SourceRecords> {
     }
 
     public static MySqlRecords forRecords(
-            final String splitId, final Iterator<SourceRecords> recordsForSplit) {
+            final String splitId, final Iterator<SourceRecord> recordsForSplit) {
         return new MySqlRecords(splitId, recordsForSplit, Collections.emptySet());
     }
 
