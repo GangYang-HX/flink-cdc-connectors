@@ -115,6 +115,14 @@ public final class RowDataDebeziumDeserializeSchema
         Envelope.Operation op = Envelope.operationFor(record);
         Struct value = (Struct) record.value();
         Schema valueSchema = record.valueSchema();
+        /**
+         * 针对不同的操作类型，进行不同的操作
+         * 1.after表示更改之后的数据结果 before表示更改之前的数据
+         * 2.只有update的时候才需要同时使用 before和after
+         * 3.针对不同的操作使用RowKind表示，在sql层面会根据数据的标识来进行对应处理，比如insert、update操作
+         * 4.对于table内容，我们只需要将数据转换成对应的RowData类型，并对其表示RowKind类型，框架便会帮我在sink的时候做出对应的操作
+         * 5.在Sql中使用CDC，我们需要将其加上RowKind，对于后续的操作我们就无需关心了
+         */
         if (op == Envelope.Operation.CREATE || op == Envelope.Operation.READ) {
             GenericRowData insert = extractAfterRow(value, valueSchema);
             validator.validate(insert, RowKind.INSERT);

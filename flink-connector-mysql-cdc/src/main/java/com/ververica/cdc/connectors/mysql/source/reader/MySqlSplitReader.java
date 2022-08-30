@@ -45,7 +45,9 @@ import java.util.Queue;
 import static com.ververica.cdc.connectors.mysql.debezium.DebeziumUtils.createBinaryClient;
 import static com.ververica.cdc.connectors.mysql.debezium.DebeziumUtils.createMySqlConnection;
 
-/** The {@link SplitReader} implementation for the {@link MySqlSource}. */
+/**
+ * The {@link SplitReader} implementation for the {@link MySqlSource}.
+ */
 public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(MySqlSplitReader.class);
@@ -54,8 +56,16 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
     private final int subtaskId;
     private final MySqlSourceReaderContext context;
 
-    @Nullable private DebeziumReader<SourceRecord, MySqlSplit> currentReader;
-    @Nullable private String currentSplitId;
+    /**
+     * currentReader主要有两种实现：BinlogSplitReader和SnapshotSplitReader,大概的思路就是这里会根据不同的性质区分进行数据
+     * 读取，在submitSplit的时候会创建readTask读取指定split的数据，结果会放入StatefulTaskContext的queue中，在fetch方法会
+     * 先提交split，让其执行read数据，然后通过pollSplitRecords方法再调用queue.poll拉取数据，这是一个阻塞操作，如果超时则抛出
+     * 中断异常。
+     */
+    @Nullable
+    private DebeziumReader<SourceRecord, MySqlSplit> currentReader;
+    @Nullable
+    private String currentSplitId;
 
     public MySqlSplitReader(
             MySqlSourceConfig sourceConfig, int subtaskId, MySqlSourceReaderContext context) {
@@ -67,19 +77,24 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
 
     @Override
     public RecordsWithSplitIds<SourceRecord> fetch() throws IOException {
-
+        //执行fetch的时候提前检查一下currentReader，并根据不同的split创建不同的对应的reader(binlog/snapshot)
         checkSplitOrStartNext();
         checkNeedStopBinlogReader();
 
         Iterator<SourceRecord> dataIt;
         try {
+            /**
+             * 调用具体的debeziumReader执行任务
+             * 在reader中会调用StatefulTaskContaxt的queue的poll方法拉取数据，该方法会阻塞（也可以根据时间阻塞），
+             * 如果时间间隔内没有返回数据则被中断，抛出InterruptedException
+             */
             dataIt = currentReader.pollSplitRecords();
         } catch (InterruptedException e) {
             LOG.warn("fetch data failed.", e);
             throw new IOException(e);
         }
         return dataIt == null
-                ? finishedSnapshotSplit()
+                ? finishedSnapshotSplit() //如果没有读取到数据则返回一个空的，该方法执行后会将currentSplitId设置为null,表示该split已经执行完成
                 : MySqlRecords.forRecords(currentSplitId, dataIt);
     }
 
@@ -105,7 +120,8 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
     }
 
     @Override
-    public void wakeUp() {}
+    public void wakeUp() {
+    }
 
     @Override
     public void close() throws Exception {
@@ -156,6 +172,7 @@ public class MySqlSplitReader implements SplitReader<SourceRecord, MySqlSplit> {
                 currentReader = new BinlogSplitReader(statefulTaskContext, subtaskId);
                 LOG.info("BinlogSplitReader is created.");
             }
+            //提交一个split到reader，reader会在submitSplit方法创建ReadTask对象，进行读取数据，将数据放入StatefulTaskContext的queue中，readTask放入线程池执行任务
             currentReader.submitSplit(nextSplit);
         }
     }

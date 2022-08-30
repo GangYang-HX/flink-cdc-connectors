@@ -91,6 +91,16 @@ public class MySqlSourceReader<T>
             MySqlSourceConfig sourceConfig) {
         super(
                 elementQueue,
+                /**
+                 * new SingleThreadFetcherManager:一个简单的fetcher管理器，做一些读取操作
+                 * 流程描述：
+                 *    1.SingleThreadFetcherManager.createSplitFetcher构建一个SplitFetcher（实现来Runnable）；
+                 *    2.在SplitFetcher中会构建一个fetcherTask;
+                 *    3.在SplitFetcher.run方法中循环调用this.runOnce()；
+                 *    4.this.runOnce()会持续调用fetcherTask.run()读取数据；
+                 *    5.fetcherTask.run()会调用MysqlSplitReader.fetcher()，返回reader读取的数据；
+                 *    6.将读取的数据放入到elementQueue中。
+                 */
                 new SingleThreadFetcherManager<>(elementQueue, splitReaderSupplier::get),
                 recordEmitter,
                 config,
@@ -104,13 +114,13 @@ public class MySqlSourceReader<T>
     }
 
     @Override
-    public void start() {
+    public void start() { //启动reader
         if (getNumberOfCurrentlyAssignedSplits() == 0) {
             context.sendSplitRequest();
         }
     }
 
-    @Override
+    @Override //当reader分配到新的split的时候，会初始化一个split的state
     protected MySqlSplitState initializedState(MySqlSplit split) {
         if (split.isSnapshotSplit()) {
             return new MySqlSnapshotSplitState(split.asSnapshotSplit());
@@ -142,7 +152,7 @@ public class MySqlSourceReader<T>
         return unfinishedSplits;
     }
 
-    @Override
+    @Override //清理已处理完成的split状态
     protected void onSplitFinished(Map<String, MySqlSplitState> finishedSplitIds) {
         for (MySqlSplitState mySqlSplitState : finishedSplitIds.values()) {
             MySqlSplit mySqlSplit = mySqlSplitState.toMySqlSplit();
@@ -162,13 +172,18 @@ public class MySqlSourceReader<T>
         context.sendSplitRequest();
     }
 
+    /**
+     * 添加此reader要读取的split列表，当SplitEnumerator通过SplitEnumeratorContext分配一个split时将调用此方法。
+     * 即调用context.assignSplit(SourceSplit,int) 或者 context.assignSplits(SplitsAssignment)
+     * @param splits
+     */
     @Override
     public void addSplits(List<MySqlSplit> splits) {
         // restore for finishedUnackedSplits
         List<MySqlSplit> unfinishedSplits = new ArrayList<>();
         for (MySqlSplit split : splits) {
             LOG.info("Add Split: " + split);
-            if (split.isSnapshotSplit()) {
+            if (split.isSnapshotSplit()) { //判断是否是snapshot split
                 MySqlSnapshotSplit snapshotSplit = split.asSnapshotSplit();
                 if (snapshotSplit.isSnapshotReadFinished()) {
                     finishedUnackedSplits.put(snapshotSplit.splitId(), snapshotSplit);
@@ -178,15 +193,16 @@ public class MySqlSourceReader<T>
             } else {
                 MySqlBinlogSplit binlogSplit = split.asBinlogSplit();
                 // the binlog split is suspended
-                if (binlogSplit.isSuspended()) {
+                if (binlogSplit.isSuspended()) { //split是否被挂起
                     suspendedBinlogSplit = binlogSplit;
-                } else if (!binlogSplit.isCompletedSplit()) {
+                } else if (!binlogSplit.isCompletedSplit()) { //如果binlog split未完成则加入未完成的列表中，并向splitEnumerator发送binlog split meta请求的事件
                     uncompletedBinlogSplits.put(split.splitId(), split.asBinlogSplit());
                     requestBinlogSplitMetaIfNeeded(split.asBinlogSplit());
                 } else {
-                    uncompletedBinlogSplits.remove(split.splitId());
-                    MySqlBinlogSplit mySqlBinlogSplit =
+                    uncompletedBinlogSplits.remove(split.splitId()); //从未完成的split集合删除指定split，表示未完成的split集合没有该split meta的信息
+                    MySqlBinlogSplit mySqlBinlogSplit = //创建未binlog split，带有table schema信息
                             discoverTableSchemasForBinlogSplit(split.asBinlogSplit());
+                    // 添加到未完成的split列表中，后续会进行read操作
                     unfinishedSplits.add(mySqlBinlogSplit);
                 }
             }
@@ -201,12 +217,14 @@ public class MySqlSourceReader<T>
 
     private MySqlBinlogSplit discoverTableSchemasForBinlogSplit(MySqlBinlogSplit split) {
         final String splitId = split.splitId();
-        if (split.getTableSchemas().isEmpty()) {
-            try (MySqlConnection jdbc = DebeziumUtils.createMySqlConnection(sourceConfig)) {
+        if (split.getTableSchemas().isEmpty()) { //如果tableSchema不存在则填充，否则直接返回split
+            try (MySqlConnection jdbc = //静态方法，构建一个mysqlConnection，可以认为就是一个jdbc connect;
+                         DebeziumUtils.createMySqlConnection(sourceConfig)) {
                 Map<TableId, TableChanges.TableChange> tableSchemas =
+                        //静态方法，根据我们SourceBuilder构建的时候给定的database和tableList来构建对应的tableId和TableChange，然后我们在read的时候需要
                         TableDiscoveryUtils.discoverCapturedTableSchemas(sourceConfig, jdbc);
                 LOG.info("The table schema discovery for binlog split {} success", splitId);
-                return MySqlBinlogSplit.fillTableSchemas(split, tableSchemas);
+                return MySqlBinlogSplit.fillTableSchemas(split, tableSchemas); //静态方法，构建一个带有tableSchema的MysqlBinlogSplit
             } catch (SQLException e) {
                 LOG.error("Failed to obtains table schemas due to {}", e.getMessage());
                 throw new FlinkRuntimeException(e);
@@ -219,6 +237,7 @@ public class MySqlSourceReader<T>
         }
     }
 
+    // 处理source自定义事件，接收来自SplitEnumerator,与SplitEnumerator类似
     @Override
     public void handleSourceEvents(SourceEvent sourceEvent) {
         if (sourceEvent instanceof FinishedSnapshotSplitsAckEvent) {
@@ -284,6 +303,7 @@ public class MySqlSourceReader<T>
         }
     }
 
+    //发送请求binlogSplit meta事件
     private void requestBinlogSplitMetaIfNeeded(MySqlBinlogSplit binlogSplit) {
         final String splitId = binlogSplit.splitId();
         if (!binlogSplit.isCompletedSplit()) {

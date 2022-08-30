@@ -103,10 +103,12 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecord, MySqlSp
     public void submitSplit(MySqlSplit mySqlSplit) {
         this.currentSnapshotSplit = mySqlSplit.asSnapshotSplit();
         statefulTaskContext.configure(currentSnapshotSplit);
-        this.queue = statefulTaskContext.getQueue();
+        this.queue = statefulTaskContext.getQueue(); //拿到context的queue，在pollSplitRecords的时候需要
         this.nameAdjuster = statefulTaskContext.getSchemaNameAdjuster();
         this.hasNextElement.set(true);
         this.reachEnd.set(false);
+
+        //主要读取逻辑在readTask中
         this.splitSnapshotReadTask =
                 new MySqlSnapshotSplitReadTask(
                         statefulTaskContext.getConnectorConfig(),
@@ -118,21 +120,27 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecord, MySqlSp
                         statefulTaskContext.getSnapshotReceiver(),
                         StatefulTaskContext.getClock(),
                         currentSnapshotSplit);
+
+        //提交一个runnable到线程中，主要是执行readTask的execute方法
         executorService.submit(
                 () -> {
                     try {
                         currentTaskRunning = true;
-                        // execute snapshot read task
+                        // execute snapshot read task,自己实现的contextImpl，主要记录高水位和低水位用
                         final SnapshotSplitChangeEventSourceContextImpl sourceContext =
                                 new SnapshotSplitChangeEventSourceContextImpl();
                         SnapshotResult snapshotResult =
-                                splitSnapshotReadTask.execute(
+                                splitSnapshotReadTask.execute( //执行readTask
                                         sourceContext, statefulTaskContext.getOffsetContext());
 
                         final MySqlBinlogSplit backfillBinlogSplit =
                                 createBackfillBinlogSplit(sourceContext);
                         // optimization that skip the binlog read when the low watermark equals high
                         // watermark
+                        /**
+                         * 由于snapshot是并行读取的，所以当读取该split数据的时候低水位和高水位相同，说明在read数据中没有出现其他操作，所以可以退出binlog
+                         * 优化阶段，可以认为该split范围的数据没有变更，不需要在snapshot之后进行binlog的读取
+                          */
                         final boolean binlogBackfillRequired =
                                 backfillBinlogSplit
                                         .getEndingOffset()
@@ -143,8 +151,9 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecord, MySqlSp
                             return;
                         }
 
-                        // execute binlog read task
+                        // execute binlog read task，snapshot执行完成后，开始binlogReadTask的读取操作
                         if (snapshotResult.isCompletedOrSkipped()) {
+                            // 在snapshot read task读取结束后，会记录高低水位，水位线作为参数构建binlog read task。
                             final MySqlBinlogSplitReadTask backfillBinlogReadTask =
                                     createBackfillBinlogReadTask(backfillBinlogSplit);
                             final MySqlOffsetContext.Loader loader =
@@ -153,7 +162,7 @@ public class SnapshotSplitReader implements DebeziumReader<SourceRecord, MySqlSp
                             final MySqlOffsetContext mySqlOffsetContext =
                                     loader.load(
                                             backfillBinlogSplit.getStartingOffset().getOffset());
-
+                            //拿到snapshot的高水位作为endOffset，在binlog read task中会以endOffset作为结束条件，小于endOffset的数据都会被read并发送下游
                             backfillBinlogReadTask.execute(
                                     new SnapshotBinlogSplitChangeEventSourceContextImpl(),
                                     mySqlOffsetContext);

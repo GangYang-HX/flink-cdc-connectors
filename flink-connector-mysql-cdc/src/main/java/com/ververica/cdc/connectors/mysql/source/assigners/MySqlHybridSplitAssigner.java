@@ -139,17 +139,19 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
         return snapshotSplitAssigner.waitingForFinishedSplits();
     }
 
-    // 获取已完成的split并且包含
+    // 获取已完成的split并且包含他的元数据，可以根据已经完成snapshot(snapshot的某一个split)生成对应的split
     @Override
     public List<FinishedSnapshotSplitInfo> getFinishedSplitInfos() {
         return snapshotSplitAssigner.getFinishedSplitInfos();
     }
 
+    // 使用已完成的binlog偏移量来处理已完成的split，用于确定合适生成binlog split以及生成什么binlog split，也就是回调
     @Override
     public void onFinishedSplits(Map<String, BinlogOffset> splitFinishedOffsets) {
         snapshotSplitAssigner.onFinishedSplits(splitFinishedOffsets);
     }
 
+    // 向此splitAssigner添加一组split,当某些split处理失败，则需要重新添加分割时调用此方法
     @Override
     public void addSplits(Collection<MySqlSplit> splits) {
         List<MySqlSplit> snapshotSplits = new ArrayList<>();
@@ -164,6 +166,7 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
         snapshotSplitAssigner.addSplits(snapshotSplits);
     }
 
+    // -----------checkpoint 容错相关--------------
     @Override
     public PendingSplitsState snapshotState(long checkpointId) {
         return new HybridPendingSplitsState(
@@ -195,8 +198,9 @@ public class MySqlHybridSplitAssigner implements MySqlSplitAssigner {
         snapshotSplitAssigner.close();
     }
 
-    // --------------------------------------------------------------------------------------------
-
+    // ----------------------------------binlog split部分----------------------------------------------------------
+    // 构建binlog split就是根据已经完成snapshot split来构建binlog split的一个过程。
+    // 创建split就是描述如何进行split的相关内容，比如snapshot会按照主键去做split
     private MySqlBinlogSplit createBinlogSplit() {
         final List<MySqlSnapshotSplit> assignedSnapshotSplit =
                 snapshotSplitAssigner.getAssignedSplits().values().stream()

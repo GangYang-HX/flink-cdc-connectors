@@ -74,6 +74,7 @@ public final class MySqlRecordEmitter<T>
     @Override
     public void emitRecord(SourceRecord element, SourceOutput<T> output, MySqlSplitState splitState)
             throws Exception {
+        //判断一下消息的时间类型，如果是一个sourceRecord则发送到下游，否则则进行对应的操作
         if (isWatermarkEvent(element)) {
             BinlogOffset watermark = getWatermark(element);
             if (isHighWatermarkEvent(element) && splitState.isSnapshotSplitState()) {
